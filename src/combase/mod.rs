@@ -20,6 +20,7 @@ pub struct tagSOleTlsData {
     pub pCurrentCtxForNefariousReaders: *mut std::ffi::c_void,
     pub pCurrentContext: *mut std::ffi::c_void
 }
+pub type SOleTlsData = tagSOleTlsData;
 
 #[repr(transparent)]
 #[derive(core::cmp::PartialEq, core::cmp::Eq)]
@@ -225,6 +226,38 @@ pub type XAptCallback = tagXAptCallback;
 // Used on most recent builds of Windows.
 #[repr(transparent)]
 pub struct IRundown(windows::core::IUnknown);
+impl IRundown {
+    pub unsafe fn RemQueryInterface(&self, ripid: REFIPID, cRefs: u32, cIids: u16, iids: *mut windows::core::GUID, ppQIResults: *mut *mut REMQIRESULT) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RemQueryInterface)(::windows::core::Vtable::as_raw(self), ripid, cRefs, cIids, iids, ppQIResults).ok()
+    }
+    pub unsafe fn RemAddRef(&self, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF, pResults: *mut windows::core::HRESULT) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RemAddRef)(::windows::core::Vtable::as_raw(self), cInterfaceRefs, InterfaceRefs, pResults).ok()
+    }
+    pub unsafe fn RemRelease(&self, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RemRelease)(::windows::core::Vtable::as_raw(self), cInterfaceRefs, InterfaceRefs).ok()
+    }
+    pub unsafe fn RemQueryInterface2(&self, ripid: REFIPID, cIids: u32, piids: *mut windows::core::GUID, phr: *mut windows::core::HRESULT, ppMIFs: *mut *mut MInterfacePointer) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RemQueryInterface2)(::windows::core::Vtable::as_raw(self), ripid, cIids, piids, phr, ppMIFs).ok()
+    }
+    pub unsafe fn AcknowledgeMarshalingSets(&self, cMarshalingSets: u16, pMarshalingSets: *mut ULONG_PTR) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).AcknowledgeMarshalingSets)(::windows::core::Vtable::as_raw(self), cMarshalingSets, pMarshalingSets).ok()
+    }
+    pub unsafe fn RemChangeRef(&self, flags: u32, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RemChangeRef)(::windows::core::Vtable::as_raw(self), flags, cInterfaceRefs, InterfaceRefs).ok()
+    }
+    pub unsafe fn DoCallback(&self, pParam: *mut XAptCallback) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).DoCallback)(::windows::core::Vtable::as_raw(self), pParam).ok()
+    }
+    pub unsafe fn DoNonreentrantCallback(&self, pParam: *mut XAptCallback) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).DoNonreentrantCallback)(::windows::core::Vtable::as_raw(self), pParam).ok()
+    }
+    pub unsafe fn GetInterfaceNameFromIPID(&self, ipid: *mut IPID, Name: *mut windows::core::HSTRING) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).GetInterfaceNameFromIPID)(::windows::core::Vtable::as_raw(self), ipid, Name).ok()
+    }
+    pub unsafe fn RundownOid(&self, cOid: u32, aOid: *mut OID, aRundownStatus: *mut u8) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RundownOid)(::windows::core::Vtable::as_raw(self), cOid, aOid, aRundownStatus).ok()
+    }
+}
 unsafe impl windows::core::Interface for IRundown {
     const IID: windows::core::GUID = windows::core::GUID::from_u128(0x00000134_0000_0000_c000_000000000046);
 }
@@ -234,21 +267,44 @@ unsafe impl windows::core::Vtable for IRundown {
 #[repr(C)]
 pub struct IRundown_Vtbl {
     pub base__: windows::core::IUnknown_Vtbl,
-    pub RemQueryInterface: unsafe extern "system" fn(ripid: REFIPID, cRefs: u32, cIids: u16, iids: *mut windows::core::GUID, ppQIResults: *mut *mut REMQIRESULT) -> windows::core::HRESULT,
-    pub RemAddRef: unsafe extern "system" fn(cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF, pResults: *mut windows::core::HRESULT) -> windows::core::HRESULT,
-    pub RemRelease: unsafe extern "system" fn(cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> windows::core::HRESULT,
-    pub RemQueryInterface2: unsafe extern "system" fn(ripid: REFIPID, cIids: u32, piids: *mut windows::core::GUID, phr: *mut windows::core::HRESULT, ppMIFs: *mut *mut MInterfacePointer) -> windows::core::HRESULT,
-    pub AcknowledgeMarshalingSets: unsafe extern "system" fn(cMarshalingSets: u16, pMarshalingSets: *mut ULONG_PTR) -> windows::core::HRESULT,
-    pub RemChangeRef: unsafe extern "system" fn(flags: u32, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> windows::core::HRESULT,
-    pub DoCallback: unsafe extern "system" fn(pParam: *mut XAptCallback) -> windows::core::HRESULT,
-    pub DoNonreentrantCallback: unsafe extern "system" fn(pParam: *mut XAptCallback) -> windows::core::HRESULT,
-    pub GetInterfaceNameFromIPID: unsafe extern "system" fn(ipid: *mut IPID, Name: *mut windows::core::HSTRING) -> windows::core::HRESULT,
-    pub RundownOid: unsafe extern "system" fn(cOid: u32, aOid: *mut OID, aRundownStatus: *mut u8) -> windows::core::HRESULT
+    pub RemQueryInterface: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, ripid: REFIPID, cRefs: u32, cIids: u16, iids: *mut windows::core::GUID, ppQIResults: *mut *mut REMQIRESULT) -> windows::core::HRESULT,
+    pub RemAddRef: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF, pResults: *mut windows::core::HRESULT) -> windows::core::HRESULT,
+    pub RemRelease: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> windows::core::HRESULT,
+    pub RemQueryInterface2: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, ripid: REFIPID, cIids: u32, piids: *mut windows::core::GUID, phr: *mut windows::core::HRESULT, ppMIFs: *mut *mut MInterfacePointer) -> windows::core::HRESULT,
+    pub AcknowledgeMarshalingSets: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, cMarshalingSets: u16, pMarshalingSets: *mut ULONG_PTR) -> windows::core::HRESULT,
+    pub RemChangeRef: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, flags: u32, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> windows::core::HRESULT,
+    pub DoCallback: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, pParam: *mut XAptCallback) -> windows::core::HRESULT,
+    pub DoNonreentrantCallback: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, pParam: *mut XAptCallback) -> windows::core::HRESULT,
+    pub GetInterfaceNameFromIPID: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, ipid: *mut IPID, Name: *mut windows::core::HSTRING) -> windows::core::HRESULT,
+    pub RundownOid: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, cOid: u32, aOid: *mut OID, aRundownStatus: *mut u8) -> windows::core::HRESULT
 }
 
 // Used on legacy systems (Vista, Windows 7, Windows 2008)
 #[repr(transparent)]
 pub struct IRundownLegacy(windows::core::IUnknown);
+impl IRundownLegacy {
+    pub unsafe fn RemQueryInterface(&self, ripid: REFIPID, cRefs: u32, cIids: u16, iids: *mut windows::core::GUID, ppQIResults: *mut *mut REMQIRESULT) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RemQueryInterface)(::windows::core::Vtable::as_raw(self), ripid, cRefs, cIids, iids, ppQIResults).ok()
+    }
+    pub unsafe fn RemAddRef(&self, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF, pResults: *mut windows::core::HRESULT) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RemAddRef)(::windows::core::Vtable::as_raw(self), cInterfaceRefs, InterfaceRefs, pResults).ok()
+    }
+    pub unsafe fn RemRelease(&self, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RemRelease)(::windows::core::Vtable::as_raw(self), cInterfaceRefs, InterfaceRefs).ok()
+    }
+    pub unsafe fn RemQueryInterface2(&self, ripid: REFIPID, cIids: u32, piids: *mut windows::core::GUID, phr: *mut windows::core::HRESULT, ppMIFs: *mut *mut MInterfacePointer) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RemQueryInterface2)(::windows::core::Vtable::as_raw(self), ripid, cIids, piids, phr, ppMIFs).ok()
+    }
+    pub unsafe fn RemChangeRef(&self, flags: u32, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RemChangeRef)(::windows::core::Vtable::as_raw(self), flags, cInterfaceRefs, InterfaceRefs).ok()
+    }
+    pub unsafe fn DoCallback(&self, pParam: &mut XAptCallback) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).DoCallback)(::windows::core::Vtable::as_raw(self), pParam).ok()
+    }
+    pub unsafe fn RundownOid(&self, cOid: u32, aOid: *mut OID, aRundownStatus: *mut u8) -> Result<(), ::windows::core::Error> {
+        (::windows::core::Vtable::vtable(self).RundownOid)(::windows::core::Vtable::as_raw(self), cOid, aOid, aRundownStatus).ok()
+    }
+}
 unsafe impl windows::core::Interface for IRundownLegacy {
     const IID: windows::core::GUID = windows::core::GUID::from_u128(0x00000134_0000_0000_c000_000000000046);
 }
@@ -258,13 +314,13 @@ unsafe impl windows::core::Vtable for IRundownLegacy {
 #[repr(C)]
 pub struct IRundownLegacy_Vtbl {
     pub base__: windows::core::IUnknown_Vtbl,
-    pub RemQueryInterface: unsafe extern "system" fn(ripid: REFIPID, cRefs: u32, cIids: u16, iids: *mut windows::core::GUID, ppQIResults: *mut *mut REMQIRESULT) -> windows::core::HRESULT,
-    pub RemAddRef: unsafe extern "system" fn(cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF, pResults: *mut windows::core::HRESULT) -> windows::core::HRESULT,
-    pub RemRelease: unsafe extern "system" fn(cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> windows::core::HRESULT,
-    pub RemQueryInterface2: unsafe extern "system" fn(ripid: REFIPID, cIids: u32, piids: *mut windows::core::GUID, phr: *mut windows::core::HRESULT, ppMIFs: *mut *mut MInterfacePointer) -> windows::core::HRESULT,
-    pub RemChangeRef: unsafe extern "system" fn(flags: u32, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> windows::core::HRESULT,
-    pub DoCallback: unsafe extern "system" fn(pParam: *mut XAptCallback) -> windows::core::HRESULT,
-    pub RundownOid: unsafe extern "system" fn(cOid: u32, aOid: *mut OID, aRundownStatus: *mut u8) -> windows::core::HRESULT
+    pub RemQueryInterface: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, ripid: REFIPID, cRefs: u32, cIids: u16, iids: *mut windows::core::GUID, ppQIResults: *mut *mut REMQIRESULT) -> windows::core::HRESULT,
+    pub RemAddRef: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF, pResults: *mut windows::core::HRESULT) -> windows::core::HRESULT,
+    pub RemRelease: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> windows::core::HRESULT,
+    pub RemQueryInterface2: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, ripid: REFIPID, cIids: u32, piids: *mut windows::core::GUID, phr: *mut windows::core::HRESULT, ppMIFs: *mut *mut MInterfacePointer) -> windows::core::HRESULT,
+    pub RemChangeRef: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, flags: u32, cInterfaceRefs: u16, InterfaceRefs: *mut REMINTERFACEREF) -> windows::core::HRESULT,
+    pub DoCallback: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, pParam: &mut XAptCallback) -> windows::core::HRESULT,
+    pub RundownOid: unsafe extern "system" fn(this: *mut ::core::ffi::c_void, cOid: u32, aOid: *mut OID, aRundownStatus: *mut u8) -> windows::core::HRESULT
 }
 // use winapi::um::unknwnbase::*;
 // use windows::Win32::System::Com::IStream;
