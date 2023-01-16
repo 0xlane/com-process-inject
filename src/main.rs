@@ -662,7 +662,6 @@ unsafe fn get_irundown_instance(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) 
         let mut name = String::from("OBJREF:");
         name.push_str(&general_purpose::STANDARD.encode(::core::slice::from_raw_parts(&objref as *const _ as *const _, size_of::<OBJREF>())));
         name.push_str(":");
-        println!("{name}");
 
         let mut rundown = ::core::mem::MaybeUninit::<IRundown>::uninit();
         CoGetObject(PCWSTR::from_raw(name.encode_utf16().collect::<Vec<u16>>().as_ptr()), None, &<IRundown as ::windows::core::Interface>::IID, rundown.as_mut_ptr() as _)?;
@@ -796,23 +795,6 @@ unsafe fn init_rundown_ctx(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Re
     ret
 }
 
-fn cli() -> clap::Command {
-    use clap::{arg, Command};
-    Command::new("com-inject")
-        .about("A process injection tool via COM")
-        .author("REInject")
-        .subcommand_required(true)
-        .arg_required_else_help(true)
-        .subcommand(
-            Command::new("inject")
-                .about("Inject special dll or shellcode to target process")
-                .arg(arg!(pid: [PID] "Target process id").required(true).value_parser(clap::value_parser!(u32)))
-                .arg(arg!(-m --method "Use CoGetObject instead of CoUnmarshalInterface to establish channel").action(clap::ArgAction::SetTrue))
-                .arg(arg!(-d --dll <PATH> "Inject DLL into target, specify full path").required_unless_present("shellcode").value_parser(clap::value_parser!(String)))
-                .arg(arg!(-s --shellcode <PATH> "Inject shellcode into target process").required_unless_present("dll").value_parser(clap::value_parser!(String)))
-        )
-}
-
 unsafe fn inject_dll(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Result<()> {
     // 打开目标进程
     let hp = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, false, (*cc).pid)?;
@@ -891,6 +873,29 @@ unsafe fn inject_shellcode(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Re
     ret
 }
 
+fn cli() -> clap::Command {
+    use clap::{arg, Command};
+    Command::new("com-inject")
+        .about("A process injection tool via COM")
+        .author("REInject")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            Command::new("inject")
+                .about("Inject special dll or shellcode to target process")
+                .arg(arg!(pid: [PID] "Target process id").required(true).value_parser(clap::value_parser!(u32)))
+                .arg(arg!(-m --method "Use CoGetObject instead of CoUnmarshalInterface to establish channel").action(clap::ArgAction::SetTrue))
+                .arg(arg!(-d --dll <PATH> "Inject DLL into target, specify full path").required_unless_present("shellcode").value_parser(clap::value_parser!(String)))
+                .arg(arg!(-s --shellcode <PATH> "Inject shellcode into target process").required_unless_present("dll").value_parser(clap::value_parser!(String)))
+        )
+        .subcommand(
+            Command::new("list")
+            .about("List interface instance in special or all process")
+            .arg(arg!(pid: [PID] "Target process id").value_parser(clap::value_parser!(u32)))
+            .arg(arg![-v --verbose "Dispaly all interface, default only IRundown"].action(clap::ArgAction::SetTrue))
+        )
+}
+
 fn main() -> Result<()> {
     // 解析参数
     let matches = cli().get_matches();
@@ -926,6 +931,28 @@ fn main() -> Result<()> {
 
                 // 执行结束后清理
                 let ret = start_inject();
+                CoUninitialize();
+                ret
+            }
+        }
+        Some(("list", sub_matches)) => {
+            cc.pid = *sub_matches.get_one::<u32>("pid").unwrap_or(&0);
+            cc.verbose = *sub_matches.get_one::<bool>("verbose") .expect("required");
+
+            unsafe {
+                // 初始化 COM
+                CoInitializeEx(None, COINIT_MULTITHREADED).unwrap();
+
+                let mut start_list = move || -> Result<()> {
+                    // 初始化 COM_CONTEXT
+                    init_cc(&mut cc).with_context(|| "Init COM_CONTEXT failed")?;
+                    // list
+                    list_ipid(&mut cc).with_context(|| "List IPID failed")?;
+                    Ok(())
+                };
+
+                // 执行结束后清理
+                let ret = start_list();
                 CoUninitialize();
                 ret
             }
