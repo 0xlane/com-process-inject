@@ -1,5 +1,7 @@
 #![allow(non_snake_case, non_upper_case_globals, non_camel_case_types)]
 pub mod combase;
+pub mod utils;
+
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose, Engine as _};
 use combase::*;
@@ -1055,8 +1057,10 @@ unsafe fn inject_shellcode(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Re
 fn cli() -> clap::Command {
     use clap::{arg, Command};
     Command::new("com-inject")
+        .version("1.0")
         .about("A process injection tool via COM")
         .author("REInject")
+        .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
@@ -1079,6 +1083,8 @@ fn main() -> Result<()> {
     // 解析参数
     let matches = cli().get_matches();
     let mut cc: COM_CONTEXT = Default::default();
+    // 尝试开启 debug
+    let _ = unsafe { utils::proc::enable_debug_priv() };
     match matches.subcommand() {
         Some(("inject", sub_matches)) => {
             cc.pid = *sub_matches.get_one::<u32>("pid").expect("required");

@@ -10,6 +10,7 @@ version = "0.43.0"
 features = [
     "implement",
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_System_WindowsProgramming",
     "Win32_System_Memory",
     "Win32_System_Com",
