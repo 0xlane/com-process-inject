@@ -763,6 +763,8 @@ unsafe fn get_irundown_instance(
     objref.u_objref.u_standard.saResAddr.wNumEntries = 0;
     objref.u_objref.u_standard.saResAddr.wSecurityOffset = 0;
 
+    println!("Connecting to object by IPID: {:?}", ::core::mem::transmute::<_, ::windows::core::GUID>((*rc).ipid));
+    
     if (*cc).use_objref {
         let mut name = String::from("OBJREF:");
         name.push_str(
@@ -821,7 +823,7 @@ unsafe fn invoke_docallback(
             // 如果错误是 "The array bounds are invalid"
             if e.code().0 as u32 == 0x800706C6 {
                 // 使用旧接口
-                println!("Executing IRundown::DoCallback({:p})", (*rc).pfnCallback);
+                println!("Executing IRundownLegacy::DoCallback({:p})", (*rc).pfnCallback);
                 let legacy_rundown: IRundownLegacy = ::core::mem::transmute(rundown);
                 Ok(legacy_rundown.DoCallback(&mut params)?)
             } else {
@@ -840,10 +842,22 @@ unsafe fn init_rundown_ctx(cc: *mut COM_CONTEXT, rc: *mut RUNDOWN_CONTEXT) -> Re
         (*cc).verbose = false;
         let entries = get_ipid_entries(cc, hp).ok_or(::windows::core::Error::from_win32())?;
 
-        // 保存第一个
-        (*rc).ipid = entries[0].ipid;
-        (*rc).oxid = entries[0].oxid;
-        (*rc).oid = entries[0].oid;
+        // 优先找 tid 正确的，否则 tid 是 0 的，都没有再选择第一个
+        let x: Vec<_> = entries.iter().filter(|x| x.ipid.tid > 0x0 && x.ipid.tid < 0xffff).collect();
+        let y: Vec<_> = entries.iter().filter(|x| x.ipid.tid == 0x0).collect();
+        if x.len() > 0 {
+            (*rc).ipid = x[0].ipid;
+            (*rc).oxid = x[0].oxid;
+            (*rc).oid = x[0].oid;
+        } else if y.len() > 0 {
+            (*rc).ipid = y[0].ipid;
+            (*rc).oxid = y[0].oxid;
+            (*rc).oid = y[0].oid;
+        } else {
+            (*rc).ipid = entries[0].ipid;
+            (*rc).oxid = entries[0].oxid;
+            (*rc).oid = entries[0].oid;
+        }
 
         // 如果第一次读到 16 位 NULL，则需要调用 DoCallback 初始化
         // 某些情况会返回 “试图引用不存在的令牌 (0x800703F0)”
