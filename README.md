@@ -1,4 +1,4 @@
-# COM-INJECT for RUST
+# COM PROCESS INJECTION for RUST
 
 Process Injection via Component Object Model (COM) IRundown::DoCallback().
 
